@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- Choosing Suspend inside Omarchy no longer freezes the VM window. The guest can no longer enter the S3 or S4 sleep states; a suspend request falls through to suspend-to-idle and the lock screen, and new guests have Omarchy's suspend-off toggle on so the system menu does not offer it.
+- New guest images include the Noto CJK fonts, so Chinese, Japanese, and Korean text renders instead of boxes.
+
 ## v0.0.13-preview - 2026-09-05
 
 ### Features

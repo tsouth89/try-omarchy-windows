@@ -1,0 +1,89 @@
+From a15ee524c648fec42e87329e1ad87e9b371dfa10 Mon Sep 17 00:00:00 2001
+From: Tyler South <tsouth2@gmail.com>
+Date: Sat, 5 Sep 2026 17:47:31 -0400
+Subject: [PATCH] Hide Suspend for new users and ship the CJK fonts
+
+A VM has nothing to suspend to, so new users get Omarchy's suspend-off toggle switched on and the system menu no longer offers it. noto-fonts-cjk joins the package list so Chinese, Japanese, and Korean text renders instead of boxes, matching upstream Omarchy.
+---
+ guest/packages.lock.json             | 7 ++++---
+ guest/packages.txt                   | 1 +
+ guest/scripts/materialize-omarchy.sh | 4 ++++
+ guest/tests/verify.py                | 4 ++++
+ 4 files changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/guest/packages.lock.json b/guest/packages.lock.json
+index f96d957..48156e9 100644
+--- a/guest/packages.lock.json
++++ b/guest/packages.lock.json
+@@ -457,6 +457,7 @@
+     "networkmanager": "1.58.1-1",
+     "nftables": "1:1.1.7-3",
+     "noto-fonts": "1:2026.09.01-1",
++    "noto-fonts-cjk": "20240730-1",
+     "noto-fonts-emoji": "1:2.051-1",
+     "npth": "1.8-1",
+     "nspr": "4.40-1",
+@@ -537,8 +538,8 @@
+     "sbc": "2.2-1",
+     "sdbus-cpp": "2.3.1-1",
+     "sddm": "0.21.0-7",
+-    "sdl2-compat": "2.32.70-1",
+-    "sdl3": "3.4.14-1",
++    "sdl2-compat": "2.32.72-1",
++    "sdl3": "3.4.16-1",
+     "seatd": "0.9.3-1",
+     "sed": "4.10-2",
+     "serd": "0.32.10-1",
+@@ -661,6 +662,6 @@
+     "zram-generator": "1.2.1-1",
+     "zstd": "1.5.7-3"
+   },
+-  "requestedFileSha256": "409de4b3d70eccf788b17c4dfb23279179d2d989c21e558ddc50cee18c8c71ca",
++  "requestedFileSha256": "98ec8a20e42d58ccfec86826eae9a8b904a23025c4bb33dc3b614cdb6a71cb9d",
+   "schemaVersion": 1
+ }
+diff --git a/guest/packages.txt b/guest/packages.txt
+index e4c4c39..8146172 100644
+--- a/guest/packages.txt
++++ b/guest/packages.txt
+@@ -49,6 +49,7 @@ nautilus
+ neovim
+ networkmanager
+ noto-fonts
++noto-fonts-cjk
+ noto-fonts-emoji
+ omacalc
+ omacut
+diff --git a/guest/scripts/materialize-omarchy.sh b/guest/scripts/materialize-omarchy.sh
+index 3754203..c741e76 100755
+--- a/guest/scripts/materialize-omarchy.sh
++++ b/guest/scripts/materialize-omarchy.sh
+@@ -168,6 +168,10 @@ copy_contents "$source_dir/applications" "$root/etc/skel/.local/share/applicatio
+ # gaps, border, and rounding settings.
+ mkdir -p "$root/etc/skel/.local/state/omarchy/toggles/hypr"
+ install_file 0644 "$source_dir/default/hypr/toggles/flags.lua" "$root/etc/skel/.local/state/omarchy/toggles/hypr/flags.lua"
++# A VM has nothing to suspend to: the launcher disables S3/S4 and a request
++# falls through to suspend-to-idle plus the lock screen. Omarchy's own toggle
++# hides Suspend from the system menu, so switch it on for every new user.
++touch "$root/etc/skel/.local/state/omarchy/toggles/suspend-off"
+ 
+ if [[ -d $source_dir/default/nautilus-python/extensions ]]; then
+   copy_tree "$source_dir/default/nautilus-python/extensions" "$root/etc/skel/.local/share/nautilus-python/extensions"
+diff --git a/guest/tests/verify.py b/guest/tests/verify.py
+index 9e70fcb..72a49d0 100755
+--- a/guest/tests/verify.py
++++ b/guest/tests/verify.py
+@@ -119,6 +119,10 @@ def main() -> None:
+         and 'copy_contents "$source_dir/default/hypr/toggles"' not in materialize,
+         "new users start with no Hyprland toggles switched on (only the flags.lua placeholder)",
+     )
++    check(
++        'touch "$root/etc/skel/.local/state/omarchy/toggles/suspend-off"' in materialize,
++        "new users have Omarchy's suspend-off toggle on, since a VM cannot suspend",
++    )
+     check(
+         'nvim_config="$root/usr/share/omarchy-nvim/config"' in materialize
+         and 'copy_tree "$nvim_config" "$root/etc/skel/.config/nvim"' in materialize
+-- 
+2.55.0
+
