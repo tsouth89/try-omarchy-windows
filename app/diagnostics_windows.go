@@ -29,6 +29,7 @@ func hostFacts() map[string]string {
 	}
 	facts["host.timeZone"] = hostTimeZoneKey()
 	facts["host.keyboardLayout"] = hostKeyboardLayoutID()
+	facts["host.locale"] = hostLocaleName()
 	total, avail := availMemMiB()
 	facts["host.memoryTotalMiB"] = fmt.Sprint(total)
 	facts["host.memoryAvailableMiB"] = fmt.Sprint(avail)

@@ -1,0 +1,156 @@
+From c1f7c95278fd79b303e85b8af1dd3971b29c32f6 Mon Sep 17 00:00:00 2001
+From: Tyler South <tsouth2@gmail.com>
+Date: Sat, 5 Sep 2026 17:57:20 -0400
+Subject: [PATCH] Follow the Windows display language
+
+tryomarchy.locale=xx_YY on the kernel command line, set by the launcher from the Windows user locale, generates that UTF-8 locale and makes it the system default. Applied only when the value changes, like the zone and keyboard. Integration revision 11.
+---
+ .../local/lib/try-omarchy/apply-host-locale   | 36 +++++++++++++++++++
+ guest/scripts/finalize-rootfs.sh              |  2 +-
+ guest/tests/test_overlay_scripts.py           | 33 ++++++++++++++++-
+ guest/tests/verify.py                         |  2 +-
+ 4 files changed, 70 insertions(+), 3 deletions(-)
+
+diff --git a/guest/factory-overlay/usr/local/lib/try-omarchy/apply-host-locale b/guest/factory-overlay/usr/local/lib/try-omarchy/apply-host-locale
+index dc75a59..51e27a3 100755
+--- a/guest/factory-overlay/usr/local/lib/try-omarchy/apply-host-locale
++++ b/guest/factory-overlay/usr/local/lib/try-omarchy/apply-host-locale
+@@ -12,13 +12,19 @@ state_dir=${TRY_OMARCHY_STATE_DIR:-/var/lib/try-omarchy}
+ zoneinfo=${TRY_OMARCHY_ZONEINFO:-/usr/share/zoneinfo}
+ localtime=${TRY_OMARCHY_LOCALTIME:-/etc/localtime}
+ vconsole=${TRY_OMARCHY_VCONSOLE:-/etc/vconsole.conf}
++locale_gen=${TRY_OMARCHY_LOCALE_GEN:-/etc/locale.gen}
++locale_conf=${TRY_OMARCHY_LOCALE_CONF:-/etc/locale.conf}
++locale_sources=${TRY_OMARCHY_LOCALE_SOURCES:-/usr/share/i18n/locales}
++locale_gen_cmd=${TRY_OMARCHY_LOCALE_GEN_CMD:-locale-gen}
+ 
+ zone=""
+ keyboard=""
++locale=""
+ for word in $(<"$cmdline_file"); do
+   case $word in
+     tryomarchy.tz=*) zone=${word#tryomarchy.tz=} ;;
+     tryomarchy.kb=*) keyboard=${word#tryomarchy.kb=} ;;
++    tryomarchy.locale=*) locale=${word#tryomarchy.locale=} ;;
+   esac
+ done
+ 
+@@ -59,6 +65,36 @@ apply_keyboard() {
+   echo "keyboard layout set to $spec from Windows"
+ }
+ 
++# apply_locale generates the Windows display language's UTF-8 locale and
++# makes it the system default. Sessions pick LANG up at the next login.
++apply_locale() {
++  local name=$1 marker="$state_dir/host-locale" full tmp
++  [[ $name =~ ^[a-z]{2,3}_[A-Z]{2}$ ]] || { echo "ignoring an invalid locale on the kernel command line" >&2; return 0; }
++  [[ "$(cat "$marker" 2>/dev/null || true)" != "$name" ]] || return 0
++  if [[ ! -f $locale_sources/$name ]]; then
++    echo "locale $name is not available in the guest" >&2
++    return 0
++  fi
++  full="$name.UTF-8"
++  if ! grep -qx "$full UTF-8" "$locale_gen" 2>/dev/null; then
++    tmp=$(mktemp "$(dirname "$locale_gen")/.locale.gen.XXXXXX")
++    { if [[ -f $locale_gen ]]; then grep -v "^#\?$full UTF-8\$" "$locale_gen" || true; fi; printf '%s UTF-8\n' "$full"; } >"$tmp"
++    chmod 0644 "$tmp"
++    mv -f "$tmp" "$locale_gen"
++  fi
++  if ! $locale_gen_cmd >/dev/null 2>&1; then
++    echo "could not generate locale $full" >&2
++    return 0
++  fi
++  tmp=$(mktemp "$(dirname "$locale_conf")/.locale.conf.XXXXXX")
++  { if [[ -f $locale_conf ]]; then grep -v '^LANG=' "$locale_conf" || true; fi; printf 'LANG=%s\n' "$full"; } >"$tmp"
++  chmod 0644 "$tmp"
++  mv -f "$tmp" "$locale_conf"
++  printf '%s\n' "$name" >"$marker"
++  echo "language set to $full from Windows"
++}
++
+ [[ -z $zone ]] || apply_zone "$zone"
+ [[ -z $keyboard ]] || apply_keyboard "$keyboard"
++[[ -z $locale ]] || apply_locale "$locale"
+ exit 0
+diff --git a/guest/scripts/finalize-rootfs.sh b/guest/scripts/finalize-rootfs.sh
+index 0159324..eb23b44 100755
+--- a/guest/scripts/finalize-rootfs.sh
++++ b/guest/scripts/finalize-rootfs.sh
+@@ -86,7 +86,7 @@ kernel_release=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d -printf '
+ }
+ # Bump this revision whenever compat-overlay.tar changes in a way that must be
+ # applied to persistent disks created by an earlier launcher release.
+-compat_revision=10
++compat_revision=11
+ printf '%s:%s\n' "$compat_revision" "$kernel_release" >/usr/share/try-omarchy/compat-version
+ 
+ # Never let the container host's hardware autodetection remove the virtual
+diff --git a/guest/tests/test_overlay_scripts.py b/guest/tests/test_overlay_scripts.py
+index 4d01bf2..c65bea4 100644
+--- a/guest/tests/test_overlay_scripts.py
++++ b/guest/tests/test_overlay_scripts.py
+@@ -341,9 +341,22 @@ class HostLocaleTests(OverlayCase):
+         self.vconsole.write_text("KEYMAP=us\n")
+ 
+     def apply(self, cmdline: str) -> subprocess.CompletedProcess:
++        self.locale_gen = self.root / "locale.gen"
++        if not self.locale_gen.exists():
++            self.locale_gen.write_text("en_US.UTF-8 UTF-8\n")
++        self.locale_conf = self.root / "locale.conf"
++        if not self.locale_conf.exists():
++            self.locale_conf.write_text("LANG=en_US.UTF-8\n")
++        sources = self.root / "locales"
++        sources.mkdir(exist_ok=True)
++        for name in ("en_US", "de_DE"):
++            (sources / name).write_text("")
++        self.fake("locale-gen", 'echo gen >> "$CALLS"')
+         return self.run_script(HOST_LOCALE, cmdline=cmdline, TRY_OMARCHY_STATE_DIR=str(self.state),
+                                TRY_OMARCHY_ZONEINFO=str(self.zoneinfo), TRY_OMARCHY_LOCALTIME=str(self.localtime),
+-                               TRY_OMARCHY_VCONSOLE=str(self.vconsole))
++                               TRY_OMARCHY_VCONSOLE=str(self.vconsole), TRY_OMARCHY_LOCALE_GEN=str(self.locale_gen),
++                               TRY_OMARCHY_LOCALE_CONF=str(self.locale_conf), TRY_OMARCHY_LOCALE_SOURCES=str(sources),
++                               CALLS=str(self.log))
+ 
+     def test_applies_zone_and_keyboard_from_the_command_line(self) -> None:
+         result = self.apply("root=/dev/vda tryomarchy.tz=America/New_York tryomarchy.kb=de:nodeadkeys quiet")
+@@ -376,6 +389,24 @@ class HostLocaleTests(OverlayCase):
+         self.assertIn("not installed", result.stderr)
+         self.assertEqual(os.readlink(self.localtime), str(self.zoneinfo / "UTC"))
+ 
++    def test_generates_and_selects_the_windows_language(self) -> None:
++        result = self.apply("tryomarchy.locale=de_DE")
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(self.locale_gen.read_text(), "en_US.UTF-8 UTF-8\nde_DE.UTF-8 UTF-8\n")
++        self.assertEqual(self.locale_conf.read_text(), "LANG=de_DE.UTF-8\n")
++        self.assertEqual(self.log.read_text(), "gen\n")
++        self.assertIn("language set to de_DE.UTF-8", result.stdout)
++        # Same language again: nothing regenerated.
++        self.apply("tryomarchy.locale=de_DE")
++        self.assertEqual(self.log.read_text(), "gen\n")
++
++    def test_unavailable_or_unsafe_locale_is_ignored(self) -> None:
++        for value in ["xx_YY", "de_DE;id", "../de_DE", "DE_de"]:
++            result = self.apply(f"tryomarchy.locale={value}")
++            self.assertEqual(result.returncode, 0, result.stderr)
++            self.assertEqual(self.locale_conf.read_text(), "LANG=en_US.UTF-8\n", value)
++        self.assertFalse(self.log.exists())
++
+     def test_no_parameters_change_nothing(self) -> None:
+         result = self.apply("root=/dev/vda quiet")
+         self.assertEqual(result.returncode, 0, result.stderr)
+diff --git a/guest/tests/verify.py b/guest/tests/verify.py
+index 72a49d0..19c5019 100755
+--- a/guest/tests/verify.py
++++ b/guest/tests/verify.py
+@@ -261,7 +261,7 @@ def main() -> None:
+ 
+     finalize_rootfs = read(GUEST / "scripts/finalize-rootfs.sh")
+     check(
+-        "compat_revision=10" in finalize_rootfs
++        "compat_revision=11" in finalize_rootfs
+         and "etc/systemd/user/omarchy-fcitx5.service.d/10-try-omarchy.conf" in finalize_rootfs
+         and "usr/local/lib/try-omarchy/agent" in finalize_rootfs
+         and "compat_revision" in finalize_rootfs.split("compat-version")[0]
+-- 
+2.55.0
+

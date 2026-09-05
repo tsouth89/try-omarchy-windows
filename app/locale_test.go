@@ -32,23 +32,23 @@ func TestXKBForKLIDPrefersFullIdentifiers(t *testing.T) {
 }
 
 func TestHostLocaleCmdlineOnlyCarriesValidValues(t *testing.T) {
-	if got := hostLocaleCmdline("America/New_York", "de", ""); got != " tryomarchy.tz=America/New_York tryomarchy.kb=de" {
+	if got := hostLocaleCmdline("America/New_York", "de", "", ""); got != " tryomarchy.tz=America/New_York tryomarchy.kb=de" {
 		t.Fatalf("plain: %q", got)
 	}
-	if got := hostLocaleCmdline("Europe/Berlin", "us", "intl"); got != " tryomarchy.tz=Europe/Berlin tryomarchy.kb=us:intl" {
+	if got := hostLocaleCmdline("Europe/Berlin", "us", "intl", ""); got != " tryomarchy.tz=Europe/Berlin tryomarchy.kb=us:intl" {
 		t.Fatalf("variant: %q", got)
 	}
-	if got := hostLocaleCmdline("", "", ""); got != "" {
+	if got := hostLocaleCmdline("", "", "", ""); got != "" {
 		t.Fatalf("empty: %q", got)
 	}
 	for _, bad := range []string{"../etc", "us us", "a b", "Etc UTC", "us;rm"} {
-		for _, got := range []string{hostLocaleCmdline(bad, "us", ""), hostLocaleCmdline("Etc/UTC", bad, ""), hostLocaleCmdline("Etc/UTC", "us", bad)} {
+		for _, got := range []string{hostLocaleCmdline(bad, "us", "", ""), hostLocaleCmdline("Etc/UTC", bad, "", ""), hostLocaleCmdline("Etc/UTC", "us", bad, ""), hostLocaleCmdline("Etc/UTC", "us", "", bad)} {
 			if strings.Contains(got, bad) {
 				t.Errorf("unsafe value %q reached the command line: %q", bad, got)
 			}
 		}
 	}
-	if got := hostLocaleCmdline("../etc", "us", ""); got != " tryomarchy.kb=us" {
+	if got := hostLocaleCmdline("../etc", "us", "", ""); got != " tryomarchy.kb=us" {
 		t.Fatalf("a bad zone must not drop the keyboard: %q", got)
 	}
 }
@@ -59,5 +59,16 @@ func TestSplitKeyboardSpec(t *testing.T) {
 		if layout != want[0] || variant != want[1] {
 			t.Errorf("%q: got %q/%q", spec, layout, variant)
 		}
+	}
+}
+
+func TestPosixLocaleForWindows(t *testing.T) {
+	for name, want := range map[string]string{"de-DE": "de_DE", "pt-BR": "pt_BR", "en-US": "en_US", " ja-JP ": "ja_JP", "sr-Latn-RS": "", "de": "", "": "", "x-y": ""} {
+		if got := posixLocaleForWindows(name); got != want {
+			t.Errorf("%q: got %q, want %q", name, got, want)
+		}
+	}
+	if got := hostLocaleCmdline("Europe/Berlin", "de", "", "de_DE"); got != " tryomarchy.tz=Europe/Berlin tryomarchy.locale=de_DE tryomarchy.kb=de" {
+		t.Fatalf("locale on the command line: %q", got)
 	}
 }
