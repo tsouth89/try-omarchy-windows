@@ -246,6 +246,15 @@ func ensureRuntime(cfg *config, release, sumsSHA256 string) (string, error) {
 	if runtimeReceiptMatches(root, release, sumsSHA256, archiveSHA) {
 		return root, nil
 	}
+	if runtimeArchiveMatches(root, archiveSHA) {
+		// Same archive under a new release: adopt the new release identity
+		// instead of downloading and unpacking identical bytes.
+		if err := writeRuntimeReceipt(root, release, sumsSHA256, archiveSHA); err != nil {
+			return "", fmt.Errorf("recording runtime release: %w", err)
+		}
+		logf("runtime archive unchanged in %s; kept the installed runtime", releaseVersion(release))
+		return root, nil
+	}
 	executable := filepath.Join(root, "bin", "qemu-system-x86_64w.exe")
 	_, executableErr := os.Stat(executable)
 	_, receiptErr := os.Stat(filepath.Join(root, runtimeReceiptFilename))

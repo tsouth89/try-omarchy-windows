@@ -91,3 +91,22 @@ func writeRuntimeReceipt(root, release, manifestSHA, archiveSHA string) error {
 	path := filepath.Join(root, runtimeReceiptFilename)
 	return os.WriteFile(path, data, 0o644)
 }
+
+// runtimeArchiveMatches reports whether the installed runtime came from the
+// same authenticated archive, whatever release it was recorded under. A new
+// release that ships the unchanged archive must not download it again.
+func runtimeArchiveMatches(root, archiveSHA string) bool {
+	data, err := os.ReadFile(filepath.Join(root, runtimeReceiptFilename))
+	if err != nil || len(data) > maxInstallReceiptBytes {
+		return false
+	}
+	var receipt runtimeReceipt
+	if json.Unmarshal(data, &receipt) != nil || receipt.Schema != 1 ||
+		!validSHA256(archiveSHA) || receipt.ArchiveSHA256 != normalizedSHA256(archiveSHA) ||
+		!validSHA256(receipt.Executable.SHA256) {
+		return false
+	}
+	info, err := os.Lstat(filepath.Join(root, "bin", "qemu-system-x86_64w.exe"))
+	return err == nil && info.Mode().IsRegular() && info.Size() == receipt.Executable.Size &&
+		info.ModTime().UnixNano() == receipt.Executable.ModTimeUnixNano
+}
