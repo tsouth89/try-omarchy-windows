@@ -353,3 +353,13 @@ func TestBuildQemuArgsTellsTheGuestTheRenderingPath(t *testing.T) {
 		t.Fatalf("cpu marker missing: %s", args)
 	}
 }
+
+func TestBuildQemuArgsDisablesGuestSleepStates(t *testing.T) {
+	for _, gpu := range []bool{true, false} {
+		cfg := &config{vmDir: "/vm", guestDir: "/guest", disk: "/vm/disk.raw", diskFormat: "raw", memMiB: 4096, audio: "none", useGpu: gpu}
+		args := strings.Join(buildQemuArgs(cfg, "root=/dev/vda"), " ")
+		if !strings.Contains(args, "-global ICH9-LPC.disable_s3=1 -global ICH9-LPC.disable_s4=1") {
+			t.Fatalf("gpu=%v: sleep states not disabled: %s", gpu, args)
+		}
+	}
+}
