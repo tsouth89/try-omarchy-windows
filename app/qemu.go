@@ -66,6 +66,11 @@ func buildQemuArgs(cfg *config, cmdline string) []string {
 		"-device", "virtio-keyboard-pci", "-device", "virtio-tablet-pci",
 		"-device", "virtio-net-pci,netdev=n0", "-netdev", netdevArg(cfg.forwards),
 		"-device", "virtio-rng-pci",
+		// The guest must not sleep: a suspended VM leaves the window frozen
+		// with no way back from the keyboard, and Omarchy's power menu
+		// offers suspend whenever the kernel advertises it. With S3 and S4
+		// off the kernel reports no such state and systemd refuses cleanly.
+		"-global", "ICH9-LPC.disable_s3=1", "-global", "ICH9-LPC.disable_s4=1",
 		// The backend must be explicit: with no audiodev the guest's PipeWire
 		// stalls on virtio-snd control messages and the whole session hangs.
 		// cfg.audio is dsound normally; "none" on machines where DirectSound
