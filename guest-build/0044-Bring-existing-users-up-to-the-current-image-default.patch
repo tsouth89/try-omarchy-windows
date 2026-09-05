@@ -1,0 +1,321 @@
+From d6c789188ec652a4b003ca8ea0015d0c291d9abb Mon Sep 17 00:00:00 2001
+From: Tyler South <tsouth2@gmail.com>
+Date: Sat, 5 Sep 2026 18:02:54 -0400
+Subject: [PATCH] Bring existing users up to the current image defaults at boot
+
+Image updates never touch home directories, so disks from older releases kept whatever their skeleton had. A boot service, shipped in the compat overlay, now replaces monitors.lua when it is still the untouched skeleton (Omarchy's default plus any version of the QEMU profile block), removes the seeded no-gaps and aspect-ratio toggles when they are still the seeded copies, and switches on the suspend-off toggle. It runs once per integration revision. Revision 12.
+---
+ .../try-omarchy-catch-up.service              |  1 +
+ .../system/try-omarchy-catch-up.service       | 11 +++
+ .../usr/local/lib/try-omarchy/catch-up        | 81 +++++++++++++++++++
+ .../hypr-monitors-qemu.append.lua             | 42 ++++++++++
+ guest/scripts/finalize-rootfs.sh              |  6 +-
+ guest/tests/test_overlay_scripts.py           | 66 +++++++++++++++
+ guest/tests/verify.py                         |  8 +-
+ 7 files changed, 213 insertions(+), 2 deletions(-)
+ create mode 120000 guest/factory-overlay/etc/systemd/system/multi-user.target.wants/try-omarchy-catch-up.service
+ create mode 100644 guest/factory-overlay/etc/systemd/system/try-omarchy-catch-up.service
+ create mode 100755 guest/factory-overlay/usr/local/lib/try-omarchy/catch-up
+ create mode 100644 guest/factory-overlay/usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua
+
+diff --git a/guest/factory-overlay/etc/systemd/system/multi-user.target.wants/try-omarchy-catch-up.service b/guest/factory-overlay/etc/systemd/system/multi-user.target.wants/try-omarchy-catch-up.service
+new file mode 120000
+index 0000000..f7196b6
+--- /dev/null
++++ b/guest/factory-overlay/etc/systemd/system/multi-user.target.wants/try-omarchy-catch-up.service
+@@ -0,0 +1 @@
++../try-omarchy-catch-up.service
+\ No newline at end of file
+diff --git a/guest/factory-overlay/etc/systemd/system/try-omarchy-catch-up.service b/guest/factory-overlay/etc/systemd/system/try-omarchy-catch-up.service
+new file mode 100644
+index 0000000..5ec130a
+--- /dev/null
++++ b/guest/factory-overlay/etc/systemd/system/try-omarchy-catch-up.service
+@@ -0,0 +1,11 @@
++[Unit]
++Description=Bring existing Try Omarchy users up to the current image defaults
++After=local-fs.target
++Before=display-manager.service
++
++[Service]
++Type=oneshot
++ExecStart=/usr/local/lib/try-omarchy/catch-up
++
++[Install]
++WantedBy=multi-user.target
+diff --git a/guest/factory-overlay/usr/local/lib/try-omarchy/catch-up b/guest/factory-overlay/usr/local/lib/try-omarchy/catch-up
+new file mode 100755
+index 0000000..96d04b5
+--- /dev/null
++++ b/guest/factory-overlay/usr/local/lib/try-omarchy/catch-up
+@@ -0,0 +1,81 @@
++#!/bin/bash
++# Brings existing users up to the current image defaults after a launcher
++# integration update. Image updates never touch home directories, so a disk
++# created by an older release keeps whatever its skeleton had. This applies
++# only changes that are safe to make on a user's behalf:
++#   - replace ~/.config/hypr/monitors.lua when it is still the untouched
++#     skeleton (Omarchy's default plus any version of our QEMU profile block)
++#   - remove the Hyprland toggles an older image switched on by mistake, when
++#     they are still the seeded copies (same mtime as the flags placeholder)
++#   - switch on Omarchy's suspend-off toggle, since a VM cannot suspend
++# Runs once per integration revision, before the display manager.
++set -euo pipefail
++
++revision_file=${TRY_OMARCHY_COMPAT_VERSION:-/usr/share/try-omarchy/compat-version}
++state_dir=${TRY_OMARCHY_STATE_DIR:-/var/lib/try-omarchy}
++fragment=${TRY_OMARCHY_QEMU_FRAGMENT:-/usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua}
++omarchy_default=${TRY_OMARCHY_OMARCHY_MONITORS:-/usr/share/omarchy/config/hypr/monitors.lua}
++toggle_templates=${TRY_OMARCHY_TOGGLE_TEMPLATES:-/usr/share/omarchy/default/hypr/toggles}
++homes=${TRY_OMARCHY_HOMES:-/home}
++
++revision=$(cut -d: -f1 "$revision_file" 2>/dev/null || echo 0)
++marker="$state_dir/catch-up-revision"
++[[ "$(cat "$marker" 2>/dev/null || true)" != "$revision" ]] || exit 0
++mkdir -p "$state_dir"
++
++strip_profile_block() {
++  # Drop our appended block so the remainder can be compared with Omarchy's own file.
++  sed '/^-- BEGIN OMARCHY QEMU PROFILE$/,/^-- END OMARCHY QEMU PROFILE$/d' "$1" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
++}
++
++refresh_monitors() {
++  local home=$1 file=$1/.config/hypr/monitors.lua
++  [[ -f $file && -f $omarchy_default && -f $fragment ]] || return 0
++  grep -q '^-- BEGIN OMARCHY QEMU PROFILE$' "$file" || return 0
++  if ! cmp -s <(strip_profile_block "$file") <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$omarchy_default"); then
++    return 0
++  fi
++  local tmp
++  tmp=$(mktemp "$(dirname "$file")/.monitors.lua.XXXXXX")
++  cat "$omarchy_default" "$fragment" >"$tmp"
++  if cmp -s "$tmp" "$file"; then
++    rm -f "$tmp"
++    return 0
++  fi
++  chown --reference="$file" "$tmp"
++  chmod --reference="$file" "$tmp"
++  mv -f "$tmp" "$file"
++  echo "refreshed the QEMU profile in $file"
++}
++
++remove_seeded_toggles() {
++  local dir=$1/.local/state/omarchy/toggles/hypr flags=$1/.local/state/omarchy/toggles/hypr/flags.lua name
++  [[ -f $flags ]] || return 0
++  for name in window-no-gaps single-window-aspect-ratio; do
++    local file=$dir/$name.lua template=$toggle_templates/$name.lua
++    [[ -f $file && -f $template ]] || continue
++    cmp -s "$file" "$template" || continue
++    [[ "$(stat -c %Y "$file")" == "$(stat -c %Y "$flags")" ]] || continue
++    rm -f "$file"
++    echo "removed the seeded $name toggle from $1"
++  done
++}
++
++enable_suspend_off() {
++  local dir=$1/.local/state/omarchy/toggles
++  [[ -d $1/.local/state/omarchy ]] || return 0
++  [[ -e $dir/suspend-off ]] && return 0
++  mkdir -p "$dir"
++  touch "$dir/suspend-off"
++  chown --reference="$1" "$dir" "$dir/suspend-off" 2>/dev/null || true
++  echo "switched on the suspend-off toggle for $1"
++}
++
++for home in "$homes"/*; do
++  [[ -d $home/.config/hypr ]] || continue
++  refresh_monitors "$home" || true
++  remove_seeded_toggles "$home" || true
++  enable_suspend_off "$home" || true
++done
++printf '%s\n' "$revision" >"$marker"
++exit 0
+diff --git a/guest/factory-overlay/usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua b/guest/factory-overlay/usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua
+new file mode 100644
+index 0000000..a4c1b3c
+--- /dev/null
++++ b/guest/factory-overlay/usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua
+@@ -0,0 +1,42 @@
++
++-- BEGIN OMARCHY QEMU PROFILE
++-- QEMU publishes the live window's size and host refresh rate through Virtio
++-- GPU EDID. Quattro's preceding automatic monitor rule stays authoritative;
++-- keep the guest cursor visible because SDL displays the guest scanout
++-- directly (hiding it was a VNC-host assumption).
++local function omarchy_kernel_option_enabled(expected_option)
++  if type(io) ~= "table" or type(io.open) ~= "function" then
++    return false
++  end
++
++  local opened, cmdline_file = pcall(io.open, "/proc/cmdline", "r")
++  if not opened or not cmdline_file then
++    return false
++  end
++
++  local read_ok, cmdline = pcall(cmdline_file.read, cmdline_file, "*a")
++  pcall(cmdline_file.close, cmdline_file)
++  if not read_ok or type(cmdline) ~= "string" then
++    return false
++  end
++
++  for option in cmdline:gmatch("%S+") do
++    if option == expected_option then
++      return true
++    end
++  end
++  return false
++end
++
++if omarchy_kernel_option_enabled("omarchy.qemu=1") then
++  hl.config({ cursor = { invisible = false } })
++  o.exec_on_start("/usr/local/bin/omarchy-native-display-sync")
++end
++
++-- On CPU rendering (llvmpipe) every animation frame is CPU time the desktop
++-- feels. Start with animations off; looknfeel.lua loads after this file, so
++-- an explicit choice there still wins.
++if omarchy_kernel_option_enabled("tryomarchy.render=cpu") then
++  hl.config({ animations = { enabled = false } })
++end
++-- END OMARCHY QEMU PROFILE
+diff --git a/guest/scripts/finalize-rootfs.sh b/guest/scripts/finalize-rootfs.sh
+index eb23b44..25c91fc 100755
+--- a/guest/scripts/finalize-rootfs.sh
++++ b/guest/scripts/finalize-rootfs.sh
+@@ -66,6 +66,9 @@ compat_paths=(
+   etc/systemd/system/sysinit.target.wants/try-omarchy-host-locale.service
+   etc/systemd/system/try-omarchy-agent.service
+   etc/systemd/system/multi-user.target.wants/try-omarchy-agent.service
++  etc/systemd/system/try-omarchy-catch-up.service
++  etc/systemd/system/multi-user.target.wants/try-omarchy-catch-up.service
++  usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua
+   etc/systemd/user/try-omarchy-share-link.service
+   etc/systemd/user/graphical-session.target.wants/try-omarchy-share-link.service
+   etc/systemd/user/try-omarchy-factory-update-notice.service
+@@ -73,6 +76,7 @@ compat_paths=(
+   usr/local/bin/try-omarchy-export
+   usr/local/lib/try-omarchy/agent
+   usr/local/lib/try-omarchy/apply-host-locale
++  usr/local/lib/try-omarchy/catch-up
+   usr/local/lib/try-omarchy/guest-ready
+   usr/local/lib/try-omarchy/request-sshd
+   usr/local/lib/try-omarchy/share-link
+@@ -86,7 +90,7 @@ kernel_release=$(find /usr/lib/modules -mindepth 1 -maxdepth 1 -type d -printf '
+ }
+ # Bump this revision whenever compat-overlay.tar changes in a way that must be
+ # applied to persistent disks created by an earlier launcher release.
+-compat_revision=11
++compat_revision=12
+ printf '%s:%s\n' "$compat_revision" "$kernel_release" >/usr/share/try-omarchy/compat-version
+ 
+ # Never let the container host's hardware autodetection remove the virtual
+diff --git a/guest/tests/test_overlay_scripts.py b/guest/tests/test_overlay_scripts.py
+index c65bea4..2137d09 100644
+--- a/guest/tests/test_overlay_scripts.py
++++ b/guest/tests/test_overlay_scripts.py
+@@ -19,6 +19,8 @@ SHARE_LINK = OVERLAY / "usr/local/lib/try-omarchy/share-link"
+ REQUEST_SSHD = OVERLAY / "usr/local/lib/try-omarchy/request-sshd"
+ HOST_LOCALE = OVERLAY / "usr/local/lib/try-omarchy/apply-host-locale"
+ AGENT = OVERLAY / "usr/local/lib/try-omarchy/agent"
++CATCH_UP = OVERLAY / "usr/local/lib/try-omarchy/catch-up"
++FRAGMENT = OVERLAY / "usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua"
+ EXPORT = OVERLAY / "usr/local/bin/try-omarchy-export"
+ 
+ def generated_key(directory: Path) -> str:
+@@ -461,3 +463,67 @@ class AgentTests(OverlayCase):
+             result = self.handle(message, now=1)
+             self.assertEqual(result.returncode, 0, result.stderr)
+             self.assertEqual(self.calls(), "", message)
++
++
++class CatchUpTests(OverlayCase):
++    def setUp(self) -> None:
++        super().setUp()
++        self.homes = self.root / "homes"
++        self.user = self.homes / "alice"
++        (self.user / ".config/hypr").mkdir(parents=True)
++        self.toggles = self.user / ".local/state/omarchy/toggles/hypr"
++        self.toggles.mkdir(parents=True)
++        self.share = self.root / "omarchy"
++        self.share.mkdir()
++        self.default = self.share / "monitors.lua"
++        self.default.write_text("-- omarchy default\nhl.monitor({ output = \"\" })\n")
++        self.templates = self.share / "toggles"
++        self.templates.mkdir()
++        (self.templates / "window-no-gaps.lua").write_text("hl.config({ general = { gaps_in = 0 } })\n")
++        (self.templates / "single-window-aspect-ratio.lua").write_text("hl.config({ layout = {} })\n")
++        (self.templates / "flags.lua").write_text("-- flags\n")
++        self.old_fragment = "-- BEGIN OMARCHY QEMU PROFILE\nold block\n-- END OMARCHY QEMU PROFILE\n"
++        self.version = self.root / "compat-version"
++        self.version.write_text("12:7.2.3-arch1\n")
++        self.state = self.root / "state"
++
++    def run_catch_up(self) -> subprocess.CompletedProcess:
++        return self.run_script(CATCH_UP, TRY_OMARCHY_COMPAT_VERSION=str(self.version), TRY_OMARCHY_STATE_DIR=str(self.state),
++                               TRY_OMARCHY_QEMU_FRAGMENT=str(FRAGMENT), TRY_OMARCHY_OMARCHY_MONITORS=str(self.default),
++                               TRY_OMARCHY_TOGGLE_TEMPLATES=str(self.templates), TRY_OMARCHY_HOMES=str(self.homes))
++
++    def seed_toggles(self) -> None:
++        for name in ("flags", "window-no-gaps", "single-window-aspect-ratio"):
++            (self.toggles / f"{name}.lua").write_text((self.templates / f"{name}.lua").read_text())
++        for name in ("flags", "window-no-gaps", "single-window-aspect-ratio"):
++            os.utime(self.toggles / f"{name}.lua", (1700000000, 1700000000))
++
++    def test_untouched_skeleton_gets_the_current_profile_and_seeded_toggles_go(self) -> None:
++        monitors = self.user / ".config/hypr/monitors.lua"
++        monitors.write_text(self.default.read_text() + self.old_fragment)
++        self.seed_toggles()
++        result = self.run_catch_up()
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(monitors.read_text(), self.default.read_text() + FRAGMENT.read_text())
++        self.assertFalse((self.toggles / "window-no-gaps.lua").exists())
++        self.assertFalse((self.toggles / "single-window-aspect-ratio.lua").exists())
++        self.assertTrue((self.toggles / "flags.lua").exists())
++        self.assertTrue((self.user / ".local/state/omarchy/toggles/suspend-off").exists())
++        self.assertEqual((self.state / "catch-up-revision").read_text().strip(), "12")
++        # Second run at the same revision does nothing.
++        monitors.write_text("user edits\n")
++        self.run_catch_up()
++        self.assertEqual(monitors.read_text(), "user edits\n")
++
++    def test_edited_files_and_deliberate_toggles_are_left_alone(self) -> None:
++        monitors = self.user / ".config/hypr/monitors.lua"
++        monitors.write_text("hl.monitor({ output = \"DP-1\", scale = 2 })\n" + self.old_fragment)
++        self.seed_toggles()
++        # The user turned no-gaps back on later: different mtime than the placeholder.
++        os.utime(self.toggles / "window-no-gaps.lua", (1800000000, 1800000000))
++        result = self.run_catch_up()
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("DP-1", monitors.read_text())
++        self.assertIn("old block", monitors.read_text())
++        self.assertTrue((self.toggles / "window-no-gaps.lua").exists())
++        self.assertFalse((self.toggles / "single-window-aspect-ratio.lua").exists())
+diff --git a/guest/tests/verify.py b/guest/tests/verify.py
+index 19c5019..3c830f8 100755
+--- a/guest/tests/verify.py
++++ b/guest/tests/verify.py
+@@ -261,7 +261,9 @@ def main() -> None:
+ 
+     finalize_rootfs = read(GUEST / "scripts/finalize-rootfs.sh")
+     check(
+-        "compat_revision=11" in finalize_rootfs
++        "compat_revision=12" in finalize_rootfs
++        and "usr/local/lib/try-omarchy/catch-up" in finalize_rootfs
++        and "usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua" in finalize_rootfs
+         and "etc/systemd/user/omarchy-fcitx5.service.d/10-try-omarchy.conf" in finalize_rootfs
+         and "usr/local/lib/try-omarchy/agent" in finalize_rootfs
+         and "compat_revision" in finalize_rootfs.split("compat-version")[0]
+@@ -333,6 +335,10 @@ def main() -> None:
+         in monitor_fragment,
+         "QEMU profile starts native display sync",
+     )
++    check(
++        read(GUEST / "factory-overlay/usr/share/try-omarchy/skel-fragments/hypr-monitors-qemu.append.lua") == monitor_fragment,
++        "the compat overlay carries the current QEMU profile fragment",
++    )
+     check(
+         'omarchy_kernel_option_enabled("tryomarchy.render=cpu")' in monitor_fragment
+         and "animations = { enabled = false }" in monitor_fragment,
+-- 
+2.55.0
+
