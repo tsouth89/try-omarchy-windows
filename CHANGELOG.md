@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.0.14-preview - 2026-09-05
 
 ### Features
 - The guest follows the Windows display language: the launcher passes it along with the time zone and keyboard layout, and the guest generates that locale and makes it the default for the next login. `-locale` overrides it. Existing guests gain this with the next guest-image update.
