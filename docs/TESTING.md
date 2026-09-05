@@ -6,7 +6,7 @@ candidate against locally served, authenticated assets.
 
 ## Report details
 
-Copy this into #10 or the relevant issue. Mark untested items as untested.
+Copy this into #77 or the relevant issue. Mark untested items as untested.
 
 ```text
 Launcher version and SHA256:
