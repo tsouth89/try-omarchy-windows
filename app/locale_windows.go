@@ -2,6 +2,7 @@ package main
 
 import (
 	"syscall"
+	"unsafe"
 )
 
 // hostTimeZoneKey reads the Windows time zone key name, for example
@@ -28,10 +29,29 @@ func hostKeyboardLayoutID() string {
 	return registryString(key, "1")
 }
 
+var procGetUserDefaultLocaleName = kernel32.NewProc("GetUserDefaultLocaleName")
+
+// hostLocaleName reads the user's Windows display locale, for example "de-DE".
+func hostLocaleName() string {
+	buf := make([]uint16, 85)
+	n, _, _ := procGetUserDefaultLocaleName.Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf)
+}
+
 // hostLocale resolves what the guest should follow, honoring the explicit
 // overrides: "" follows Windows, "keep" leaves the guest alone, anything else
 // is used as given.
-func hostLocale(zoneOverride, keyboardOverride string) (zone, layout, variant string) {
+func hostLocale(zoneOverride, keyboardOverride, localeOverride string) (zone, layout, variant, locale string) {
+	switch localeOverride {
+	case "":
+		locale = posixLocaleForWindows(hostLocaleName())
+	case "keep":
+	default:
+		locale = localeOverride
+	}
 	switch zoneOverride {
 	case "":
 		zone = ianaZoneForWindows(hostTimeZoneKey())
@@ -46,5 +66,5 @@ func hostLocale(zoneOverride, keyboardOverride string) (zone, layout, variant st
 	default:
 		layout, variant = splitKeyboardSpec(keyboardOverride)
 	}
-	return zone, layout, variant
+	return zone, layout, variant, locale
 }

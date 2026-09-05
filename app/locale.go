@@ -197,6 +197,7 @@ var keyboardLayoutForLanguage = map[string][2]string{
 }
 
 var (
+	validLocaleName  = regexp.MustCompile(`^[a-z]{2,3}_[A-Z]{2}$`)
 	validZoneName    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+./-]{0,63}$`)
 	validLayoutName  = regexp.MustCompile(`^[a-z]{2,8}$`)
 	validVariantName = regexp.MustCompile(`^[A-Za-z0-9_-]{0,32}$`)
@@ -228,13 +229,32 @@ func xkbForKLID(klid string) (string, string) {
 	return "", ""
 }
 
+// posixLocaleForWindows turns a Windows locale name such as "de-DE" or
+// "pt-BR" into the POSIX form the guest generates, "de_DE". Names without a
+// region, or with script tags such as "sr-Latn-RS", yield "" and the guest
+// keeps its default.
+func posixLocaleForWindows(name string) string {
+	parts := strings.Split(strings.TrimSpace(name), "-")
+	if len(parts) != 2 {
+		return ""
+	}
+	locale := strings.ToLower(parts[0]) + "_" + strings.ToUpper(parts[1])
+	if !validLocaleName.MatchString(locale) {
+		return ""
+	}
+	return locale
+}
+
 // hostLocaleCmdline builds the kernel parameters that tell the guest which
-// time zone and keyboard layout Windows uses. Unknown values add nothing, so
-// the guest keeps whatever it has.
-func hostLocaleCmdline(zone, layout, variant string) string {
+// time zone, keyboard layout, and language Windows uses. Unknown values add
+// nothing, so the guest keeps whatever it has.
+func hostLocaleCmdline(zone, layout, variant, locale string) string {
 	words := ""
 	if zone != "" && validZoneName.MatchString(zone) {
 		words += " tryomarchy.tz=" + zone
+	}
+	if locale != "" && validLocaleName.MatchString(locale) {
+		words += " tryomarchy.locale=" + locale
 	}
 	if layout != "" && validLayoutName.MatchString(layout) && validVariantName.MatchString(variant) {
 		words += " tryomarchy.kb=" + layout
