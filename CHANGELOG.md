@@ -5,6 +5,7 @@
 ### Features
 - The guest follows the Windows display language: the launcher passes it along with the time zone and keyboard layout, and the guest generates that locale and makes it the default for the next login. `-locale` overrides it. Existing guests gain this with the next guest-image update.
 - A runtime archive that is unchanged between releases is kept instead of being downloaded and unpacked again.
+- Existing guests catch up with the image defaults on the first boot after an image update, without touching anything the person changed: an untouched `monitors.lua` gets the current QEMU profile (so CPU rendering starts with animations off there too), the "no gaps" and "single-window aspect ratio" toggles an older image switched on are removed when they are still the seeded copies, and Suspend leaves the system menu.
 
 ### Fixes
 - Choosing Suspend inside Omarchy no longer freezes the VM window. The guest can no longer enter the S3 or S4 sleep states; a suspend request falls through to suspend-to-idle and the lock screen, and new guests have Omarchy's suspend-off toggle on so the system menu does not offer it.
