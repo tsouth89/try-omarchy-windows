@@ -1,25 +1,25 @@
 # v1 readiness
 
 The Windows app and the Mac app now live under Omacom. A stable Windows release
-still needs the checks below. A passing build does not establish hardware or
+still needs the checks below; the open work is tracked in one place, GitHub
+issue #77. A passing build does not establish hardware or
 upgrade reliability.
 
 ## Runtime and release validation
 
-- [ ] Validate the source-built runtime on physical Windows hardware (#12,
-  #10), including full Hyper-V (#4). Record archive hashes and results using
+- [ ] Validate the source-built runtime on physical Windows hardware, including full Hyper-V. Record archive hashes and results using
   [RUNTIME-VALIDATION.md](RUNTIME-VALIDATION.md).
 - [ ] Pin the tested runtime and matching source archive in
   `guest-build/runtime.lock.json`, then verify the runtime packaged in the
-  release candidate (#12).
+  release candidate.
 - [ ] Verify signed draft preparation and publication using
   [RELEASING.md](RELEASING.md). A successful signing check alone does not
   establish that the full release workflow works.
 - [ ] Test a copied pre-transfer installation through the signed update path
   into the current candidate. Verify redirects, preserved files, and rollback
-  (#14), separately from preview-to-stable migration.
+ , separately from preview-to-stable migration.
 - [ ] Prepare release notes and verify public download links, signatures, and
-  versions after publication (#37).
+  versions after publication.
 
 ## Merged for release testing
 
@@ -33,19 +33,19 @@ upgrade reliability.
 
 ## Release gates
 
-- [ ] Reproduce and resolve the configuration report in #32, or document its
-  confirmed cause and supported fix.
-- [ ] Test the signed candidate on the Windows hardware matrix in #10, including
-  the source runtime (#12), full Hyper-V (#4), and remote input (#3).
+- [x] Reproduce and resolve the configuration report in #32, or document its
+  confirmed cause and supported fix. Fixed in the v0.0.13 image (guest patch 0033).
+- [ ] Test the signed candidate on the Windows hardware matrix, including
+  the source runtime, full Hyper-V, and remote input.
 - [ ] Record fresh install, existing guest upgrade, interrupted update, and
-  forced rollback (#14). Include an old preview that skips the bridge and
+  forced rollback. Include an old preview that skips the bridge and
   reaches stable through both signed update feeds.
 - [ ] Verify disk growth inside the guest, unchanged user files, and unchanged
-  capacity after lowering the setting or rolling back the launcher (#15).
-- [ ] Restore a configuration export onto a fresh physical Omarchy install (#5).
+  capacity after lowering the setting or rolling back the launcher.
+- [ ] Restore a configuration export onto a fresh physical Omarchy install.
   Confirm package and theme restoration and exclusion of VM-specific state.
-- [ ] Finish stopped-VM backup/restore and a clear reset flow (#36) before presenting
-  the guest as suitable for persistent work. Configuration export is not a VM
+- [x] Finish stopped-VM backup/restore and a clear reset flow before presenting
+  the guest as suitable for persistent work. Shipped in v0.0.12. Configuration export is not a VM
   backup.
 - [ ] Exercise sleep/resume, mixed-DPI resize, audio-device changes, and a long
   session. Record idle CPU and whether launch alone activates the microphone.
